@@ -80,11 +80,32 @@ else
     # Load a model if none loaded
     LOADED=$(lms ps 2>/dev/null | grep -c "│" || echo "0")
     if [ "$LOADED" -le 1 ]; then
-        echo "  Loading default model..."
-        # Try loading models in order of preference
-        lms load deepseek/deepseek-r1-0528-qwen3-8b --gpu max -y 2>/dev/null || \
-        lms load google/gemma-3-4b --gpu max -y 2>/dev/null || \
-        echo "  ⚠️  No compatible model found. Load one manually in LM Studio."
+        echo "  No model currently loaded. Trying to load one..."
+
+        # Try loading already-downloaded models (in order of preference)
+        if lms load deepseek/deepseek-r1-0528-qwen3-8b --gpu max -y 2>/dev/null; then
+            echo "  ✓ Loaded Qwen3 8B"
+        elif lms load google/gemma-3-4b --gpu max -y 2>/dev/null; then
+            echo "  ✓ Loaded Gemma 3 4B"
+        else
+            # No models downloaded — offer to download one
+            echo ""
+            echo "  No models downloaded yet. Would you like to download one?"
+            echo "  Recommended: Gemma 3 4B (2.8 GB, fast, good quality)"
+            echo ""
+            read -p "  Download Gemma 3 4B? [Y/n] " -n 1 -r
+            echo ""
+            if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+                echo "  Downloading Gemma 3 4B (this may take a few minutes)..."
+                lms get google/gemma-3-4b 2>/dev/null && \
+                lms load google/gemma-3-4b --gpu max -y 2>/dev/null && \
+                echo "  ✓ Downloaded and loaded Gemma 3 4B" || \
+                echo "  ⚠️  Download failed. Open LM Studio and download a model manually."
+            else
+                echo "  Skipped. The app will work without an LLM — just no text cleanup."
+                echo "  You can download a model later from LM Studio or the app's Settings tab."
+            fi
+        fi
     else
         echo "  ✓ Model already loaded"
     fi
