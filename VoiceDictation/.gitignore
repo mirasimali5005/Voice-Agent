@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+Libraries/whisper.cpp/build/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+.DS_Store

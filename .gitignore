@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Build artifacts
+.build/
+VoiceDictation/.build/
+DerivedData/
+*.o
+*.d
+
+# Whisper static libraries (too large for git)
+VoiceDictation/Libraries/lib/*.a
+
+# Swift Package Manager
+Package.resolved
+
+# App bundle
+*.app
+
+# Xcode
+xcuserdata/
+*.xcworkspace
+
+# Environment
+.env
+VoiceDictation/.claude/
+
+# Vendored whisper.cpp source (large, not our code)
+VoiceDictation/Libraries/whisper.cpp/
+
+# Python cache
+__pycache__/
+*.pyc

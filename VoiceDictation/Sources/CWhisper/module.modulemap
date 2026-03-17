@@ -1,0 +1,5 @@
+module CWhisper {
+    header "../../Libraries/include/whisper.h"
+    link "whisper_full"
+    export *
+}
