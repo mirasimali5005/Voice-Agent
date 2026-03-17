@@ -33,3 +33,4 @@ VoiceDictation/Libraries/whisper.cpp/
 # Python cache
 __pycache__/
 *.pyc
+docs/
