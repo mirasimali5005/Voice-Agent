@@ -90,5 +90,12 @@ let package = Package(
             ],
             path: "Tests/StorageTests"
         ),
+
+        // Personalization tests (DiffEngine, PatternMatcher, RuleCompressor)
+        .testTarget(
+            name: "PersonalizationTests",
+            dependencies: ["VoiceDictation"],
+            path: "Tests/PersonalizationTests"
+        ),
     ]
 )
