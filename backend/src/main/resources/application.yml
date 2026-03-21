@@ -35,6 +35,18 @@ spring:
       write-dates-as-timestamps: false
     default-property-inclusion: non_null
 
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # JWT decoding is handled by our custom JwtDecoder bean in SecurityConfig.
+          # This section is kept as a placeholder; the HS256 secret-based decoder
+          # is configured programmatically using supabase.jwt-secret.
+
+# Supabase configuration
+supabase:
+  jwt-secret: ${SUPABASE_JWT_SECRET:your-supabase-jwt-secret}
+
 # Cloudflare Workers AI configuration
 cloudflare:
   account-id: ${CLOUDFLARE_ACCOUNT_ID:your-account-id}

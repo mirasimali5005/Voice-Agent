@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  voice-agent-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - SUPABASE_DB_HOST=${DB_HOST:-postgres}
+      - SUPABASE_DB_PORT=${DB_PORT:-5432}
+      - SUPABASE_DB_NAME=${DB_NAME:-voiceagent}
+      - SUPABASE_DB_USER=${DB_USER:-voiceagent}
+      - SUPABASE_DB_PASSWORD=${DB_PASSWORD:-devpassword}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=voiceagent
+      - POSTGRES_USER=voiceagent
+      - POSTGRES_PASSWORD=devpassword
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voiceagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
