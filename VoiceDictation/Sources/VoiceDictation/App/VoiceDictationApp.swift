@@ -11,6 +11,7 @@ struct VoiceDictationApp: App {
     @State private var hotkeyListener: HotkeyListener?
     @State private var overlayPanel: RecordingOverlayPanel?
     @State private var databaseManager: DatabaseManager?
+    @State private var syncManager: SyncManager?
     @State private var isReady: Bool = false
     @State private var setupError: String?
     @State private var needsModelDownload: Bool = false
@@ -33,7 +34,11 @@ struct VoiceDictationApp: App {
                 } else if !isReady {
                     loadingView
                 } else if let db = databaseManager {
-                    MainTabView(appState: appState, databaseManager: db)
+                    MainTabView(
+                        appState: appState,
+                        databaseManager: db,
+                        syncManager: syncManager
+                    )
                 }
             }
             .task { await setup() }
@@ -143,6 +148,30 @@ struct VoiceDictationApp: App {
 
         let orch = DictationOrchestrator(appState: appState)
         orch.configure(whisperEngine: engine, databaseManager: db)
+
+        // Set up SyncManager with backend URL from AppStorage
+        let backendURL = appState.backendURL
+        let apiClient = APIClient(baseURL: backendURL)
+
+        // Check for saved auth token
+        if let savedToken = try? db.getSetting("authToken"), !savedToken.isEmpty {
+            apiClient.authToken = savedToken
+        }
+
+        let userId = appState.syncUserId.isEmpty ? UUID().uuidString : appState.syncUserId
+        if appState.syncUserId.isEmpty {
+            appState.syncUserId = userId
+        }
+
+        let sm = SyncManager(apiClient: apiClient, databaseManager: db, userId: userId)
+        self.syncManager = sm
+        orch.setSyncManager(sm)
+
+        // Start periodic sync if user has an auth token
+        if apiClient.authToken != nil {
+            sm.startPeriodicSync()
+        }
+
         self.orchestrator = orch
 
         let panel = RecordingOverlayPanel(appState: appState)

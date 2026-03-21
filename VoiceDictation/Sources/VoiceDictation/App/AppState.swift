@@ -26,6 +26,8 @@ final class AppState: ObservableObject {
     @AppStorage("whisperModelType") var whisperModelType: String = "ggml-large-v3-turbo"
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false
     @AppStorage("dictationMode") var dictationMode: String = DictationMode.casual.rawValue
+    @AppStorage("backendURL") var backendURL: String = "http://localhost:8080"
+    @AppStorage("syncUserId") var syncUserId: String = ""
 
     /// Typed accessor for the persisted dictation mode.
     var currentMode: DictationMode {

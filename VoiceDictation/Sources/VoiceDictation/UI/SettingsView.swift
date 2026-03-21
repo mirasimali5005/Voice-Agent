@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var appState: AppState
     let databaseManager: DatabaseManager
+    var syncManager: SyncManager?
 
     var body: some View {
         TabView {
@@ -17,6 +18,9 @@ struct SettingsView: View {
 
             WhisperTab(appState: appState)
                 .tabItem { Label("Whisper", systemImage: "waveform") }
+
+            SyncTab(appState: appState, syncManager: syncManager)
+                .tabItem { Label("Sync", systemImage: "arrow.triangle.2.circlepath") }
         }
         .frame(width: 520, height: 420)
         .preferredColorScheme(.dark)
@@ -313,5 +317,86 @@ private struct WhisperTab: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+// MARK: - Sync Tab
+
+private struct SyncTab: View {
+    @ObservedObject var appState: AppState
+    var syncManager: SyncManager?
+
+    @State private var isSyncing = false
+    @State private var lastSyncText = "Never"
+
+    var body: some View {
+        Form {
+            Section("Backend Connection") {
+                TextField("Backend URL", text: $appState.backendURL)
+                    .textFieldStyle(.roundedBorder)
+
+                LabeledContent("Status") {
+                    if isSyncing {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Syncing...")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 12))
+                            Text("Ready")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                LabeledContent("Last Sync") {
+                    Text(lastSyncText)
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Section {
+                Button {
+                    guard let sm = syncManager else { return }
+                    isSyncing = true
+                    Task {
+                        await sm.fullSync()
+                        await MainActor.run {
+                            isSyncing = false
+                            updateLastSyncText()
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Text("Sync Now")
+                    }
+                }
+                .disabled(syncManager == nil || isSyncing)
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .onAppear {
+            updateLastSyncText()
+        }
+    }
+
+    private func updateLastSyncText() {
+        if let date = syncManager?.lastSyncDate {
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .abbreviated
+            lastSyncText = formatter.localizedString(for: date, relativeTo: Date())
+        } else {
+            lastSyncText = "Never"
+        }
     }
 }
