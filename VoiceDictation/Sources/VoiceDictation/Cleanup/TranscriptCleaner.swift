@@ -53,6 +53,32 @@ public final class TranscriptCleaner: Sendable {
         Remember: output ONLY the cleaned transcript text, nothing else.
         """
 
+    // MARK: - Mode-Specific Prompt Templates
+
+    /// Extra instructions appended when Formal mode is active.
+    public static let formalPrompt = """
+        Clean up using professional, formal language. Expand contractions (gonna→going to, wanna→want to). Use proper punctuation.
+        """
+
+    /// Extra instructions appended when Casual mode is active.
+    public static let casualPrompt = """
+        Clean up keeping casual, conversational tone. Keep contractions. Fix obvious filler words only.
+        """
+
+    /// Extra instructions appended when Coding mode is active.
+    public static let codingPrompt = """
+        Clean up preserving all technical terms, code syntax, camelCase, snake_case. Don't expand abbreviations.
+        """
+
+    /// Returns the mode-specific prompt fragment for the given mode.
+    static func modePrompt(for mode: DictationMode) -> String {
+        switch mode {
+        case .formal:  return formalPrompt
+        case .casual:  return casualPrompt
+        case .coding:  return codingPrompt
+        }
+    }
+
     private let client: LMStudioClient
     private let model: String
     private let systemPrompt: String
@@ -67,10 +93,15 @@ public final class TranscriptCleaner: Sendable {
         self.systemPrompt = systemPrompt
     }
 
-    /// Cleans the raw transcript using the LLM. Falls back to raw text on failure or sanity check failure.
-    public func clean(rawTranscript: String) async -> CleanupResult {
+    /// Cleans the raw transcript using the LLM, applying the given dictation mode.
+    /// Falls back to raw text on failure or sanity check failure.
+    func clean(rawTranscript: String, mode: DictationMode = .casual) async -> CleanupResult {
+        // Build the final prompt: base system prompt + mode-specific instructions
+        let modeFragment = Self.modePrompt(for: mode)
+        let fullPrompt = systemPrompt + "\n\n" + modeFragment
+
         let result = await client.complete(
-            systemPrompt: systemPrompt,
+            systemPrompt: fullPrompt,
             userMessage: rawTranscript,
             model: model
         )

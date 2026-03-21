@@ -37,6 +37,16 @@ struct RecordingOverlayView: View {
                 .font(.system(size: 14, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.9))
                 .frame(minWidth: 44, alignment: .leading)
+
+            Text(appState.currentMode.rawValue.capitalized)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.white.opacity(0.55))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.1))
+                )
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)

@@ -13,6 +13,7 @@ final class DictationOrchestrator {
     private let audioRecorder = AudioRecorder()
     private var durationTimer: DispatchSourceTimer?
     private var recordingStartTime: Date?
+    private var recordingContext: DictationContext?
 
     // MARK: - Filler words to strip instantly (no LLM needed)
     private static let fillerPattern: NSRegularExpression? = {
@@ -88,6 +89,9 @@ final class DictationOrchestrator {
         // Rebuild cleaner so any prompt/model changes take effect
         rebuildCleaner()
 
+        // Capture context at recording start (frontmost app, time of day, mode)
+        recordingContext = ContextDetector.getCurrentContext(mode: appState.currentMode)
+
         pipeline.reset()
         recordingStartTime = Date()
 
@@ -145,6 +149,10 @@ final class DictationOrchestrator {
         // CAPTURE the focused text field NOW, before any async work
         let focusedTextField = TextFieldDetector.getFocusedTextField()
 
+        // Capture context & mode before async work
+        let capturedContext = recordingContext
+        let capturedMode = appState.currentMode
+
         appState.isRecording = false
         appState.currentAudioLevel = 0
         appState.statusMessage = "Processing..."
@@ -195,7 +203,10 @@ final class DictationOrchestrator {
                 }
             }
 
-            // Save entry
+            // Save entry with context and mode
+            let contextString = capturedContext?.promptFragment()
+            let modeString = capturedMode.rawValue
+
             let entry: DictationEntry
             do {
                 entry = try self.databaseManager?.insert(DictationEntry(
@@ -203,13 +214,17 @@ final class DictationOrchestrator {
                     durationSeconds: duration,
                     rawTranscript: rawTranscript,
                     cleanedText: quickCleaned,
-                    wasPasted: wasPasted
+                    wasPasted: wasPasted,
+                    context: contextString,
+                    mode: modeString
                 )) ?? DictationEntry(
                     timestamp: Date(),
                     durationSeconds: duration,
                     rawTranscript: rawTranscript,
                     cleanedText: quickCleaned,
-                    wasPasted: wasPasted
+                    wasPasted: wasPasted,
+                    context: contextString,
+                    mode: modeString
                 )
             } catch {
                 entry = DictationEntry(
@@ -217,13 +232,15 @@ final class DictationOrchestrator {
                     durationSeconds: duration,
                     rawTranscript: rawTranscript,
                     cleanedText: quickCleaned,
-                    wasPasted: wasPasted
+                    wasPasted: wasPasted,
+                    context: contextString,
+                    mode: modeString
                 )
             }
 
             // LLM cleanup in background
             if let cleaner = self.cleaner {
-                let cleanupResult = await cleaner.clean(rawTranscript: rawTranscript)
+                let cleanupResult = await cleaner.clean(rawTranscript: rawTranscript, mode: capturedMode)
                 if cleanupResult.usedLLM {
                     try? self.databaseManager?.updateCleanedText(
                         id: entry.id,

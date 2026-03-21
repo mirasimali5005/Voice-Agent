@@ -33,6 +33,28 @@ struct MenuBarView: View {
 
             Divider()
 
+            // MARK: Mode Picker
+
+            Text("Mode")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            ForEach(DictationMode.allCases) { mode in
+                Button {
+                    appState.dictationMode = mode.rawValue
+                } label: {
+                    HStack {
+                        Text(mode.rawValue.capitalized)
+                        Spacer()
+                        if appState.currentMode == mode {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
             Button("Quit") {
                 NSApplication.shared.terminate(nil)
             }
