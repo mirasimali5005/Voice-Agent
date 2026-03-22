@@ -6,6 +6,7 @@ struct VoiceDictationApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var appState = AppState()
     @StateObject private var modelManager = WhisperModelManager.shared
+    @StateObject private var authManager = AuthManager()
 
     @State private var orchestrator: DictationOrchestrator?
     @State private var hotkeyListener: HotkeyListener?
@@ -17,10 +18,14 @@ struct VoiceDictationApp: App {
     @State private var needsModelDownload: Bool = false
     @State private var accessibilityRetryTimer: DispatchSourceTimer?
 
+    @AppStorage("skipAuth") private var skipAuth: Bool = false
+
     var body: some Scene {
         WindowGroup("Voice Agent") {
             Group {
-                if let error = setupError {
+                if !authManager.isAuthenticated && !skipAuth {
+                    LoginView(authManager: authManager, skipAuth: $skipAuth)
+                } else if let error = setupError {
                     setupErrorView(error)
                 } else if needsModelDownload {
                     ModelDownloadView(
@@ -37,11 +42,18 @@ struct VoiceDictationApp: App {
                     MainTabView(
                         appState: appState,
                         databaseManager: db,
-                        syncManager: syncManager
+                        syncManager: syncManager,
+                        authManager: authManager
                     )
                 }
             }
             .task { await setup() }
+            .onChange(of: authManager.isAuthenticated) { _, isAuth in
+                if isAuth {
+                    // Re-run setup to configure sync with the new auth token
+                    Task { await setup() }
+                }
+            }
         }
 
         MenuBarExtra {
@@ -153,8 +165,10 @@ struct VoiceDictationApp: App {
         let backendURL = appState.backendURL
         let apiClient = APIClient(baseURL: backendURL)
 
-        // Check for saved auth token
-        if let savedToken = try? db.getSetting("authToken"), !savedToken.isEmpty {
+        // Use identity token from AuthManager (Keychain) if available
+        if let token = authManager.identityToken {
+            apiClient.authToken = token
+        } else if let savedToken = try? db.getSetting("authToken"), !savedToken.isEmpty {
             apiClient.authToken = savedToken
         }
 

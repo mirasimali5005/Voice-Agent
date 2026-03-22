@@ -79,51 +79,84 @@ public final class TranscriptCleaner: Sendable {
         }
     }
 
-    private let client: LMStudioClient
-    private let model: String
+    /// Ordered list of backends to try. The cleaner attempts each in order,
+    /// falling through to the next on failure or unavailability.
+    private let backends: [any CleanupBackend]
     private let systemPrompt: String
 
+    /// Initialize with an ordered list of cleanup backends and optional system prompt.
+    ///
+    /// The cleaner will try each backend in order during `clean(...)`. If a
+    /// backend reports itself as unavailable or returns a failure, the next
+    /// backend is tried. If all fail, the raw transcript is returned.
     public init(
+        backends: [any CleanupBackend],
+        systemPrompt: String = TranscriptCleaner.defaultSystemPrompt
+    ) {
+        self.backends = backends
+        self.systemPrompt = systemPrompt
+    }
+
+    /// Convenience initializer that wraps a single LMStudioClient (backward compat).
+    public convenience init(
         client: LMStudioClient,
         model: String = "default",
         systemPrompt: String = TranscriptCleaner.defaultSystemPrompt
     ) {
-        self.client = client
-        self.model = model
-        self.systemPrompt = systemPrompt
+        self.init(backends: [client], systemPrompt: systemPrompt)
     }
 
-    /// Cleans the raw transcript using the LLM, applying the given dictation mode.
-    /// Falls back to raw text on failure or sanity check failure.
+    /// Cleans the raw transcript by trying each backend in order.
+    ///
+    /// The method tries each backend sequentially:
+    /// 1. CoreML (if model exists) — fastest, no network
+    /// 2. LM Studio (if running) — good quality
+    /// 3. Raw transcript (fallback) — no cleanup
+    ///
+    /// Falls back to raw text if all backends fail or sanity check fails.
     func clean(rawTranscript: String, mode: DictationMode = .casual) async -> CleanupResult {
         // Build the final prompt: base system prompt + mode-specific instructions
         let modeFragment = Self.modePrompt(for: mode)
         let fullPrompt = systemPrompt + "\n\n" + modeFragment
 
-        let result = await client.complete(
-            systemPrompt: fullPrompt,
-            userMessage: rawTranscript,
-            model: model
-        )
+        var lastError: String?
 
-        switch result {
-        case .success(let cleaned):
-            if TranscriptCleaner.passesSanityCheck(input: rawTranscript, output: cleaned) {
-                return CleanupResult(text: cleaned, usedLLM: true)
-            } else {
-                return CleanupResult(
-                    text: rawTranscript,
-                    usedLLM: false,
-                    error: "Sanity check failed: output length was out of acceptable range."
-                )
+        for backend in backends {
+            // Check availability first to skip unavailable backends quickly
+            guard await backend.isAvailable() else {
+                print("[TranscriptCleaner] Skipping \(backend.backendName): not available")
+                lastError = "\(backend.backendName) not available"
+                continue
             }
-        case .failure(let error):
-            return CleanupResult(
-                text: rawTranscript,
-                usedLLM: false,
-                error: error.localizedDescription
+
+            let result = await backend.complete(
+                systemPrompt: fullPrompt,
+                userMessage: rawTranscript
             )
+
+            switch result {
+            case .success(let cleaned):
+                if TranscriptCleaner.passesSanityCheck(input: rawTranscript, output: cleaned) {
+                    print("[TranscriptCleaner] Cleaned via \(backend.backendName)")
+                    return CleanupResult(text: cleaned, usedLLM: true)
+                } else {
+                    print("[TranscriptCleaner] \(backend.backendName) failed sanity check, trying next")
+                    lastError = "Sanity check failed for \(backend.backendName)"
+                    continue
+                }
+            case .failure(let error):
+                print("[TranscriptCleaner] \(backend.backendName) failed: \(error.localizedDescription)")
+                lastError = error.localizedDescription
+                continue
+            }
         }
+
+        // All backends failed — return raw transcript
+        return CleanupResult(
+            text: rawTranscript,
+            usedLLM: false,
+            error: lastError
+        )
     }
 
     /// Checks that the output word count is between 30% and 180% of the input word count.

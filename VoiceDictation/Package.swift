@@ -35,6 +35,8 @@ let package = Package(
                 .linkedFramework("Metal"),
                 .linkedFramework("MetalKit"),
                 .linkedFramework("Accelerate"),
+                .linkedFramework("CoreML"),
+                .linkedFramework("AuthenticationServices"),
                 .linkedLibrary("c++"),
             ]
         ),

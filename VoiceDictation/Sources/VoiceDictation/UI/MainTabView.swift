@@ -4,6 +4,7 @@ struct MainTabView: View {
     @ObservedObject var appState: AppState
     let databaseManager: DatabaseManager
     var syncManager: SyncManager?
+    var authManager: AuthManager?
 
     @State private var selectedTab = 0
 
@@ -29,7 +30,8 @@ struct MainTabView: View {
                         SettingsView(
                             appState: appState,
                             databaseManager: databaseManager,
-                            syncManager: syncManager
+                            syncManager: syncManager,
+                            authManager: authManager
                         )
                     default:
                         HistoryView(appState: appState, databaseManager: databaseManager)

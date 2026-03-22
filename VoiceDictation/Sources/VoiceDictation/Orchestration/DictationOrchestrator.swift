@@ -58,12 +58,12 @@ final class DictationOrchestrator {
 
     /// Rebuilds the TranscriptCleaner with the latest settings (custom prompt, endpoint, rules).
     /// Called at configure time and before each recording so edits take effect immediately.
+    ///
+    /// The cleaner is configured with backends in priority order:
+    /// 1. CoreML (fastest, no network) — used if model exists on disk
+    /// 2. LM Studio (good quality) — used if local server is running
+    /// If both fail, the cleaner returns the raw transcript.
     private func rebuildCleaner() {
-        let client = LMStudioClient(
-            endpoint: appState.lmStudioEndpoint,
-            timeoutSeconds: 30.0
-        )
-
         // Read custom prompt from database; fall back to default
         var prompt = TranscriptCleaner.defaultSystemPrompt
         if let db = databaseManager,
@@ -83,9 +83,22 @@ final class DictationOrchestrator {
             }
         }
 
+        // Build ordered backend list: CoreML first, then LM Studio
+        var backends: [any CleanupBackend] = []
+
+        // 1. CoreML — on-device, fastest
+        let coremlEngine = CoreMLEngine()
+        backends.append(coremlEngine)
+
+        // 2. LM Studio — local server
+        let lmStudioClient = LMStudioClient(
+            endpoint: appState.lmStudioEndpoint,
+            timeoutSeconds: 30.0
+        )
+        backends.append(lmStudioClient)
+
         self.cleaner = TranscriptCleaner(
-            client: client,
-            model: appState.lmStudioModel,
+            backends: backends,
             systemPrompt: prompt
         )
     }
@@ -276,7 +289,7 @@ final class DictationOrchestrator {
                 } else {
                     await MainActor.run {
                         if let error = cleanupResult.error {
-                            self.appState.statusMessage = "LM Studio: \(error)"
+                            self.appState.statusMessage = "Cleanup: \(error)"
                         } else {
                             self.appState.statusMessage = wasPasted ? "Pasted" : "Copied to clipboard"
                         }
