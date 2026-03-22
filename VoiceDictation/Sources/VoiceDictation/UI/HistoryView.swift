@@ -31,7 +31,7 @@ struct HistoryView: View {
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             ForEach(entries) { entry in
-                                HistoryRowView(entry: entry)
+                                HistoryRowView(entry: entry, databaseManager: databaseManager)
                             }
                         }
                         .padding(.horizontal, 20)

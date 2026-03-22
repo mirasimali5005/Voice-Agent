@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var appState: AppState
     let databaseManager: DatabaseManager
+    var syncManager: SyncManager?
+    var authManager: AuthManager?
 
     var body: some View {
         TabView {
@@ -17,6 +19,14 @@ struct SettingsView: View {
 
             WhisperTab(appState: appState)
                 .tabItem { Label("Whisper", systemImage: "waveform") }
+
+            SyncTab(appState: appState, syncManager: syncManager)
+                .tabItem { Label("Sync", systemImage: "arrow.triangle.2.circlepath") }
+
+            if let authManager = authManager {
+                AccountTab(authManager: authManager)
+                    .tabItem { Label("Account", systemImage: "person.crop.circle") }
+            }
         }
         .frame(width: 520, height: 420)
         .preferredColorScheme(.dark)
@@ -313,5 +323,150 @@ private struct WhisperTab: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+// MARK: - Sync Tab
+
+private struct SyncTab: View {
+    @ObservedObject var appState: AppState
+    var syncManager: SyncManager?
+
+    @State private var isSyncing = false
+    @State private var lastSyncText = "Never"
+
+    var body: some View {
+        Form {
+            Section("Backend Connection") {
+                TextField("Backend URL", text: $appState.backendURL)
+                    .textFieldStyle(.roundedBorder)
+
+                LabeledContent("Status") {
+                    if isSyncing {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Syncing...")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 12))
+                            Text("Ready")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                LabeledContent("Last Sync") {
+                    Text(lastSyncText)
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Section {
+                Button {
+                    guard let sm = syncManager else { return }
+                    isSyncing = true
+                    Task {
+                        await sm.fullSync()
+                        await MainActor.run {
+                            isSyncing = false
+                            updateLastSyncText()
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Text("Sync Now")
+                    }
+                }
+                .disabled(syncManager == nil || isSyncing)
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .onAppear {
+            updateLastSyncText()
+        }
+    }
+
+    private func updateLastSyncText() {
+        if let date = syncManager?.lastSyncDate {
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .abbreviated
+            lastSyncText = formatter.localizedString(for: date, relativeTo: Date())
+        } else {
+            lastSyncText = "Never"
+        }
+    }
+}
+
+// MARK: - Account Tab
+
+private struct AccountTab: View {
+    @ObservedObject var authManager: AuthManager
+    @AppStorage("skipAuth") private var skipAuth: Bool = false
+
+    var body: some View {
+        Form {
+            if authManager.isAuthenticated {
+                Section("Signed In") {
+                    LabeledContent("Apple ID") {
+                        Text(authManager.userEmail ?? "No email on file")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+
+                    LabeledContent("User ID") {
+                        Text(truncatedUserId)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section {
+                    Button(role: .destructive) {
+                        authManager.signOut()
+                    } label: {
+                        HStack {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                            Text("Sign Out")
+                        }
+                    }
+                }
+            } else {
+                Section("Not Signed In") {
+                    Text("You are using Voice Agent without an account. Sign in to sync corrections and rules across devices.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+
+                    Button {
+                        skipAuth = false
+                        authManager.signInWithApple()
+                    } label: {
+                        HStack {
+                            Image(systemName: "apple.logo")
+                            Text("Sign in with Apple")
+                        }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
+    private var truncatedUserId: String {
+        guard let id = authManager.userId else { return "Unknown" }
+        if id.count > 16 {
+            return String(id.prefix(8)) + "..." + String(id.suffix(4))
+        }
+        return id
     }
 }

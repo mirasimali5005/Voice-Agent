@@ -3,6 +3,8 @@ import SwiftUI
 struct MainTabView: View {
     @ObservedObject var appState: AppState
     let databaseManager: DatabaseManager
+    var syncManager: SyncManager?
+    var authManager: AuthManager?
 
     @State private var selectedTab = 0
 
@@ -25,7 +27,12 @@ struct MainTabView: View {
                     case 0:
                         HistoryView(appState: appState, databaseManager: databaseManager)
                     case 1:
-                        SettingsView(appState: appState, databaseManager: databaseManager)
+                        SettingsView(
+                            appState: appState,
+                            databaseManager: databaseManager,
+                            syncManager: syncManager,
+                            authManager: authManager
+                        )
                     default:
                         HistoryView(appState: appState, databaseManager: databaseManager)
                     }

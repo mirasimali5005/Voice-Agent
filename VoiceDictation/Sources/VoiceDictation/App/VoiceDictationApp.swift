@@ -6,20 +6,26 @@ struct VoiceDictationApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var appState = AppState()
     @StateObject private var modelManager = WhisperModelManager.shared
+    @StateObject private var authManager = AuthManager()
 
     @State private var orchestrator: DictationOrchestrator?
     @State private var hotkeyListener: HotkeyListener?
     @State private var overlayPanel: RecordingOverlayPanel?
     @State private var databaseManager: DatabaseManager?
+    @State private var syncManager: SyncManager?
     @State private var isReady: Bool = false
     @State private var setupError: String?
     @State private var needsModelDownload: Bool = false
     @State private var accessibilityRetryTimer: DispatchSourceTimer?
 
+    @AppStorage("skipAuth") private var skipAuth: Bool = false
+
     var body: some Scene {
         WindowGroup("Voice Agent") {
             Group {
-                if let error = setupError {
+                if !authManager.isAuthenticated && !skipAuth {
+                    LoginView(authManager: authManager, skipAuth: $skipAuth)
+                } else if let error = setupError {
                     setupErrorView(error)
                 } else if needsModelDownload {
                     ModelDownloadView(
@@ -33,10 +39,21 @@ struct VoiceDictationApp: App {
                 } else if !isReady {
                     loadingView
                 } else if let db = databaseManager {
-                    MainTabView(appState: appState, databaseManager: db)
+                    MainTabView(
+                        appState: appState,
+                        databaseManager: db,
+                        syncManager: syncManager,
+                        authManager: authManager
+                    )
                 }
             }
             .task { await setup() }
+            .onChange(of: authManager.isAuthenticated) { _, isAuth in
+                if isAuth {
+                    // Re-run setup to configure sync with the new auth token
+                    Task { await setup() }
+                }
+            }
         }
 
         MenuBarExtra {
@@ -143,6 +160,32 @@ struct VoiceDictationApp: App {
 
         let orch = DictationOrchestrator(appState: appState)
         orch.configure(whisperEngine: engine, databaseManager: db)
+
+        // Set up SyncManager with backend URL from AppStorage
+        let backendURL = appState.backendURL
+        let apiClient = APIClient(baseURL: backendURL)
+
+        // Use identity token from AuthManager (Keychain) if available
+        if let token = authManager.identityToken {
+            apiClient.authToken = token
+        } else if let savedToken = try? db.getSetting("authToken"), !savedToken.isEmpty {
+            apiClient.authToken = savedToken
+        }
+
+        let userId = appState.syncUserId.isEmpty ? UUID().uuidString : appState.syncUserId
+        if appState.syncUserId.isEmpty {
+            appState.syncUserId = userId
+        }
+
+        let sm = SyncManager(apiClient: apiClient, databaseManager: db, userId: userId)
+        self.syncManager = sm
+        orch.setSyncManager(sm)
+
+        // Start periodic sync if user has an auth token
+        if apiClient.authToken != nil {
+            sm.startPeriodicSync()
+        }
+
         self.orchestrator = orch
 
         let panel = RecordingOverlayPanel(appState: appState)

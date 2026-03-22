@@ -35,6 +35,8 @@ let package = Package(
                 .linkedFramework("Metal"),
                 .linkedFramework("MetalKit"),
                 .linkedFramework("Accelerate"),
+                .linkedFramework("CoreML"),
+                .linkedFramework("AuthenticationServices"),
                 .linkedLibrary("c++"),
             ]
         ),
@@ -89,6 +91,13 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Tests/StorageTests"
+        ),
+
+        // Personalization tests (DiffEngine, PatternMatcher, RuleCompressor)
+        .testTarget(
+            name: "PersonalizationTests",
+            dependencies: ["VoiceDictation"],
+            path: "Tests/PersonalizationTests"
         ),
     ]
 )

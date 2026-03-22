@@ -8,6 +8,8 @@ struct DictationEntry: Codable, FetchableRecord, PersistableRecord, Identifiable
     let rawTranscript: String
     var cleanedText: String
     let wasPasted: Bool
+    var context: String?
+    var mode: String?
 
     static let databaseTableName = "dictations"
 }

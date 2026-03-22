@@ -8,11 +8,19 @@ final class DictationOrchestrator {
     private var databaseManager: DatabaseManager?
     private var pipeline: TranscriptionPipeline?
     private var cleaner: TranscriptCleaner?
+    private var syncManager: SyncManager?
 
     // MARK: - Recording State
     private let audioRecorder = AudioRecorder()
     private var durationTimer: DispatchSourceTimer?
     private var recordingStartTime: Date?
+    private var recordingContext: DictationContext?
+
+    // MARK: - Pattern Matching
+    /// Number of new corrections since last pattern matching run
+    private var correctionsSinceLastPatternRun: Int = 0
+    /// Threshold: run pattern matching every N new corrections
+    private static let patternMatchThreshold = 10
 
     // MARK: - Filler words to strip instantly (no LLM needed)
     private static let fillerPattern: NSRegularExpression? = {
@@ -43,14 +51,19 @@ final class DictationOrchestrator {
         rebuildCleaner()
     }
 
-    /// Rebuilds the TranscriptCleaner with the latest settings (custom prompt, endpoint).
-    /// Called at configure time and before each recording so edits take effect immediately.
-    private func rebuildCleaner() {
-        let client = LMStudioClient(
-            endpoint: appState.lmStudioEndpoint,
-            timeoutSeconds: 30.0
-        )
+    /// Assigns a SyncManager so the orchestrator can trigger background syncs.
+    func setSyncManager(_ syncManager: SyncManager) {
+        self.syncManager = syncManager
+    }
 
+    /// Rebuilds the TranscriptCleaner with the latest settings (custom prompt, endpoint, rules).
+    /// Called at configure time and before each recording so edits take effect immediately.
+    ///
+    /// The cleaner is configured with backends in priority order:
+    /// 1. CoreML (fastest, no network) — used if model exists on disk
+    /// 2. LM Studio (good quality) — used if local server is running
+    /// If both fail, the cleaner returns the raw transcript.
+    private func rebuildCleaner() {
         // Read custom prompt from database; fall back to default
         var prompt = TranscriptCleaner.defaultSystemPrompt
         if let db = databaseManager,
@@ -59,9 +72,33 @@ final class DictationOrchestrator {
             prompt = saved
         }
 
+        // Append compressed rules from local DB
+        if let db = databaseManager {
+            let rules = (try? db.fetchRules()) ?? []
+            if !rules.isEmpty {
+                let compressed = RuleCompressor.compress(rules: rules)
+                if !compressed.isEmpty {
+                    prompt += "\n\nUSER-SPECIFIC RULES (apply these corrections automatically):\n" + compressed
+                }
+            }
+        }
+
+        // Build ordered backend list: CoreML first, then LM Studio
+        var backends: [any CleanupBackend] = []
+
+        // 1. CoreML — on-device, fastest
+        let coremlEngine = CoreMLEngine()
+        backends.append(coremlEngine)
+
+        // 2. LM Studio — local server
+        let lmStudioClient = LMStudioClient(
+            endpoint: appState.lmStudioEndpoint,
+            timeoutSeconds: 30.0
+        )
+        backends.append(lmStudioClient)
+
         self.cleaner = TranscriptCleaner(
-            client: client,
-            model: appState.lmStudioModel,
+            backends: backends,
             systemPrompt: prompt
         )
     }
@@ -85,8 +122,11 @@ final class DictationOrchestrator {
     func startRecording() {
         guard let pipeline = pipeline else { return }
 
-        // Rebuild cleaner so any prompt/model changes take effect
+        // Rebuild cleaner so any prompt/model/rule changes take effect
         rebuildCleaner()
+
+        // Capture context at recording start (frontmost app, time of day, mode)
+        recordingContext = ContextDetector.getCurrentContext(mode: appState.currentMode)
 
         pipeline.reset()
         recordingStartTime = Date()
@@ -145,6 +185,10 @@ final class DictationOrchestrator {
         // CAPTURE the focused text field NOW, before any async work
         let focusedTextField = TextFieldDetector.getFocusedTextField()
 
+        // Capture context & mode before async work
+        let capturedContext = recordingContext
+        let capturedMode = appState.currentMode
+
         appState.isRecording = false
         appState.currentAudioLevel = 0
         appState.statusMessage = "Processing..."
@@ -195,7 +239,10 @@ final class DictationOrchestrator {
                 }
             }
 
-            // Save entry
+            // Save entry with context and mode
+            let contextString = capturedContext?.promptFragment()
+            let modeString = capturedMode.rawValue
+
             let entry: DictationEntry
             do {
                 entry = try self.databaseManager?.insert(DictationEntry(
@@ -203,13 +250,17 @@ final class DictationOrchestrator {
                     durationSeconds: duration,
                     rawTranscript: rawTranscript,
                     cleanedText: quickCleaned,
-                    wasPasted: wasPasted
+                    wasPasted: wasPasted,
+                    context: contextString,
+                    mode: modeString
                 )) ?? DictationEntry(
                     timestamp: Date(),
                     durationSeconds: duration,
                     rawTranscript: rawTranscript,
                     cleanedText: quickCleaned,
-                    wasPasted: wasPasted
+                    wasPasted: wasPasted,
+                    context: contextString,
+                    mode: modeString
                 )
             } catch {
                 entry = DictationEntry(
@@ -217,13 +268,15 @@ final class DictationOrchestrator {
                     durationSeconds: duration,
                     rawTranscript: rawTranscript,
                     cleanedText: quickCleaned,
-                    wasPasted: wasPasted
+                    wasPasted: wasPasted,
+                    context: contextString,
+                    mode: modeString
                 )
             }
 
             // LLM cleanup in background
             if let cleaner = self.cleaner {
-                let cleanupResult = await cleaner.clean(rawTranscript: rawTranscript)
+                let cleanupResult = await cleaner.clean(rawTranscript: rawTranscript, mode: capturedMode)
                 if cleanupResult.usedLLM {
                     try? self.databaseManager?.updateCleanedText(
                         id: entry.id,
@@ -236,7 +289,7 @@ final class DictationOrchestrator {
                 } else {
                     await MainActor.run {
                         if let error = cleanupResult.error {
-                            self.appState.statusMessage = "LM Studio: \(error)"
+                            self.appState.statusMessage = "Cleanup: \(error)"
                         } else {
                             self.appState.statusMessage = wasPasted ? "Pasted" : "Copied to clipboard"
                         }
@@ -246,6 +299,22 @@ final class DictationOrchestrator {
                 await MainActor.run {
                     self.appState.statusMessage = wasPasted ? "Pasted" : "Copied to clipboard"
                     self.appState.showWarning = false
+                }
+            }
+
+            // Trigger background sync if SyncManager has an auth token
+            if let syncManager = self.syncManager {
+                Task {
+                    await syncManager.fullSync()
+                }
+            }
+
+            // Check if correction count has crossed pattern matching threshold
+            self.correctionsSinceLastPatternRun += 1
+            if self.correctionsSinceLastPatternRun >= Self.patternMatchThreshold {
+                self.correctionsSinceLastPatternRun = 0
+                Task {
+                    self.runLocalPatternMatching()
                 }
             }
         }
@@ -262,5 +331,37 @@ final class DictationOrchestrator {
         appState.currentAudioLevel = 0
         appState.showWarning = false
         appState.statusMessage = "Recording cancelled"
+    }
+
+    // MARK: - Local Pattern Matching
+
+    /// Fetches all corrections from DB, runs PatternMatcher, inserts new rules,
+    /// compresses rules, and stores compressed rules for next cleanup.
+    func runLocalPatternMatching() {
+        guard let db = databaseManager else { return }
+
+        do {
+            let corrections = try db.fetchCorrections()
+            let existingRules = try db.fetchRules()
+
+            let newRules = PatternMatcher.generateRules(
+                from: corrections,
+                existingRules: existingRules
+            )
+
+            for rule in newRules {
+                try db.insertRule(rule)
+            }
+
+            if !newRules.isEmpty {
+                // Re-fetch all rules (existing + new) and compress
+                let allRules = try db.fetchRules()
+                let compressed = RuleCompressor.compress(rules: allRules)
+                try db.setSetting("compressedRules", value: compressed)
+                print("[DictationOrchestrator] Generated \(newRules.count) new rules from pattern matching")
+            }
+        } catch {
+            print("[DictationOrchestrator] Pattern matching failed: \(error.localizedDescription)")
+        }
     }
 }

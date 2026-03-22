@@ -31,13 +31,51 @@ public enum LMStudioError: Error, LocalizedError, Sendable {
 }
 
 /// A client for communicating with a local LM Studio server via the OpenAI-compatible API.
-public final class LMStudioClient: Sendable {
+public final class LMStudioClient: CleanupBackend, Sendable {
+    public let backendName = "LM Studio"
     public let endpoint: String
     public let timeoutSeconds: Double
 
     public init(endpoint: String = "http://localhost:1234", timeoutSeconds: Double = 30.0) {
         self.endpoint = endpoint
         self.timeoutSeconds = timeoutSeconds
+    }
+
+    // MARK: - CleanupBackend Conformance
+
+    /// Checks if LM Studio is reachable by sending a lightweight request.
+    public func isAvailable() async -> Bool {
+        let urlString = "\(endpoint)/v1/models"
+        guard let url = URL(string: urlString) else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 3.0 // short timeout for availability check
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return (200...299).contains(http.statusCode)
+        } catch {
+            return false
+        }
+    }
+
+    /// Protocol-conforming complete method (uses default model and temperature).
+    public func complete(systemPrompt: String, userMessage: String) async -> Result<String, Error> {
+        let result = await complete(
+            systemPrompt: systemPrompt,
+            userMessage: userMessage,
+            model: "default",
+            maxTokens: 2048,
+            temperature: 0.3
+        )
+        switch result {
+        case .success(let text):
+            return .success(text)
+        case .failure(let error):
+            return .failure(error)
+        }
     }
 
     /// Builds the JSON request body for the chat completions endpoint.
