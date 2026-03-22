@@ -1,138 +1,99 @@
 #!/usr/bin/env python3
 """
-Convert meta-llama/Llama-3.2-1B-Instruct from Hugging Face to CoreML .mlpackage.
+Download a small LLM in MLX format for on-device text cleanup.
+
+MLX models run natively on Apple Silicon with Metal GPU acceleration —
+no CoreML conversion needed, no compatibility issues.
+
+Default model: Qwen/Qwen2.5-1.5B-Instruct (ungated, no login required)
 
 Usage:
     pip install -r requirements-convert.txt
-    python convert-llama-coreml.py [--output-dir OUTPUT_DIR]
-
-The converted model is saved to:
-    ~/Library/Application Support/VoiceDictation/models/llama-3.2-1b.mlpackage
+    python convert-llama-coreml.py [--model-id MODEL_ID]
 """
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-import coremltools as ct
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
+MODEL_ID = "mlx-community/Qwen2.5-1.5B-Instruct-4bit"  # Pre-quantized, ~1GB, ungated
 DEFAULT_OUTPUT_DIR = os.path.expanduser(
     "~/Library/Application Support/VoiceDictation/models"
 )
-OUTPUT_FILENAME = "llama-3.2-1b.mlpackage"
-MAX_SEQ_LENGTH = 2048
+OUTPUT_DIRNAME = "cleanup-llm-mlx"
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def download_model(model_id: str):
-    """Download the model and tokenizer from Hugging Face."""
-    print(f"[1/4] Downloading {model_id} from Hugging Face...")
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch.float32,
-        trust_remote_code=False,
-    )
-    model.eval()
-    print(f"       Model downloaded: {sum(p.numel() for p in model.parameters()):,} parameters")
-    return model, tokenizer
+def check_dependencies():
+    """Ensure mlx-lm is installed."""
+    try:
+        import mlx_lm  # noqa: F401
+        print("[OK] mlx-lm is installed")
+    except ImportError:
+        print("[!] Installing mlx-lm...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "mlx-lm"])
+        print("[OK] mlx-lm installed")
 
 
-def trace_model(model, tokenizer):
-    """Trace the model with example inputs for CoreML conversion."""
-    print("[2/4] Tracing model with example inputs...")
-    # Create dummy inputs matching the model's expected input shape
-    dummy_input_ids = torch.randint(
-        0, tokenizer.vocab_size, (1, MAX_SEQ_LENGTH), dtype=torch.int32
-    )
-    dummy_attention_mask = torch.ones(1, MAX_SEQ_LENGTH, dtype=torch.int32)
+def download_model(model_id: str, output_dir: str) -> str:
+    """Download the MLX model from Hugging Face."""
+    from huggingface_hub import snapshot_download
 
-    traced_model = torch.jit.trace(
-        model,
-        (dummy_input_ids.long(), dummy_attention_mask.long()),
-        strict=False,
-    )
-    print("       Tracing complete.")
-    return traced_model
-
-
-def convert_to_coreml(traced_model, tokenizer):
-    """Convert the traced PyTorch model to CoreML format."""
-    print("[3/4] Converting to CoreML .mlpackage...")
-
-    input_ids_shape = ct.Shape(
-        shape=(1, ct.RangeDim(lower_bound=1, upper_bound=MAX_SEQ_LENGTH, default=128))
-    )
-    attention_mask_shape = ct.Shape(
-        shape=(1, ct.RangeDim(lower_bound=1, upper_bound=MAX_SEQ_LENGTH, default=128))
-    )
-
-    mlmodel = ct.convert(
-        traced_model,
-        inputs=[
-            ct.TensorType(name="input_ids", shape=input_ids_shape, dtype=int),
-            ct.TensorType(name="attention_mask", shape=attention_mask_shape, dtype=int),
-        ],
-        convert_to="mlprogram",
-        compute_precision=ct.precision.FLOAT16,
-        minimum_deployment_target=ct.target.macOS14,
-    )
-
-    # Add metadata
-    mlmodel.author = "VoiceDictation"
-    mlmodel.short_description = (
-        f"Llama-3.2-1B-Instruct converted for on-device transcript cleanup. "
-        f"Max sequence length: {MAX_SEQ_LENGTH}."
-    )
-    mlmodel.version = "1.0"
-
-    print("       CoreML conversion complete.")
-    return mlmodel
-
-
-def save_model(mlmodel, output_dir: str):
-    """Save the CoreML model to the output directory."""
-    output_path = os.path.join(output_dir, OUTPUT_FILENAME)
-
-    print(f"[4/4] Saving to {output_path} ...")
+    output_path = os.path.join(output_dir, OUTPUT_DIRNAME)
     os.makedirs(output_dir, exist_ok=True)
-    mlmodel.save(output_path)
 
-    # Print size
-    size_bytes = sum(
-        f.stat().st_size
-        for f in Path(output_path).rglob("*")
-        if f.is_file()
+    print(f"[1/2] Downloading {model_id} from Hugging Face...")
+    print(f"      Destination: {output_path}")
+
+    snapshot_download(
+        repo_id=model_id,
+        local_dir=output_path,
+        local_dir_use_symlinks=False,
     )
-    size_mb = size_bytes / (1024 * 1024)
-    print(f"       Saved ({size_mb:.1f} MB)")
+
+    print(f"[OK] Model downloaded to: {output_path}")
     return output_path
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def verify_model(output_path: str):
+    """Verify the model can load and generate text."""
+    print(f"\n[2/2] Verifying model...")
+
+    try:
+        from mlx_lm import load, generate
+
+        model, tokenizer = load(output_path)
+
+        test_prompt = "Clean up this transcript: gonna set up a meeting tmrw"
+        messages = [
+            {"role": "system", "content": "You are a text cleanup assistant. Fix grammar and remove filler words. Return only the cleaned text."},
+            {"role": "user", "content": test_prompt},
+        ]
+
+        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        result = generate(model, tokenizer, prompt=prompt, max_tokens=50)
+
+        print(f"      Input:  '{test_prompt}'")
+        print(f"      Output: '{result.strip()}'")
+        print(f"[OK] Model works!")
+        return True
+    except Exception as e:
+        print(f"[!] Verification failed: {e}")
+        print(f"    The model was downloaded but couldn't generate text.")
+        print(f"    This might still work — the Swift app will try to use it.")
+        return False
+
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert Llama-3.2-1B-Instruct to CoreML .mlpackage"
+        description="Download an MLX model for on-device text cleanup"
     )
     parser.add_argument(
         "--output-dir",
         default=DEFAULT_OUTPUT_DIR,
-        help=f"Directory to save the .mlpackage (default: {DEFAULT_OUTPUT_DIR})",
+        help=f"Directory to save the model (default: {DEFAULT_OUTPUT_DIR})",
     )
     parser.add_argument(
         "--model-id",
@@ -142,26 +103,29 @@ def main():
     args = parser.parse_args()
 
     print("=" * 60)
-    print("  Llama 3.2 1B -> CoreML Conversion")
+    print(f"  Voice Agent — Download Cleanup LLM")
+    print(f"  Model: {args.model_id}")
     print("=" * 60)
     print()
 
-    # Step 1: Download
-    model, tokenizer = download_model(args.model_id)
+    # Check deps
+    check_dependencies()
+    print()
 
-    # Step 2: Trace
-    traced_model = trace_model(model, tokenizer)
+    # Download
+    output_path = download_model(args.model_id, args.output_dir)
+    print()
 
-    # Step 3: Convert
-    mlmodel = convert_to_coreml(traced_model, tokenizer)
-
-    # Step 4: Save
-    output_path = save_model(mlmodel, args.output_dir)
+    # Verify
+    verify_model(output_path)
 
     print()
     print("=" * 60)
     print(f"  Done! Model saved to:")
     print(f"  {output_path}")
+    print()
+    print(f"  The Voice Agent app will automatically detect and use this model.")
+    print(f"  No LM Studio needed!")
     print("=" * 60)
 
 
